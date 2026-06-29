@@ -144,26 +144,6 @@ data/
 - 特征分析：输入变量与绝对误差的 Spearman 相关性。
 - 误差解释：基于数据摘要和知识库片段生成解释。
 
-## GitHub 上传注意事项
-
-以下内容不要上传：
-
-- `.env`
-- 真实 CSV 数据
-- `outputs/`
-- `__pycache__/`
-- `.DS_Store`
-- `.streamlit-home/`
-
-本项目已经在 `.gitignore` 中默认忽略这些文件。
-
-常用 Git 更新流程：
-
-```bash
-git add .
-git commit -m "Update app"
-git push
-```
 
 ## 当前检索方式
 
@@ -179,7 +159,7 @@ Markdown 文档
 
 目前没有使用 embedding 或向量数据库。后续如果知识库规模变大，可以升级为 embedding + FAISS / Chroma。
 
-## 后续可改进方向
+## 后续方向
 
 - 将 CSV 数据导入 SQLite，支持上传和长期管理。
 - 增加 embedding 检索，提高语义召回能力。
