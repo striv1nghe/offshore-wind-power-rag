@@ -19,7 +19,7 @@
 ├── rag_core.py             # RAG 检索、Prompt 构造和模型调用逻辑
 ├── wind_data.py            # 风电 CSV 数据读取、合并、统计和摘要逻辑
 ├── knowledge_base/         # 风电预测解释知识库
-├── data/                   # 本地数据目录，真实 CSV 默认不上传 GitHub
+├── data/                   # 本地数据目录，真实 CSV 未上传
 ├── requirements.txt        # pip 依赖
 ├── environment.yml         # Conda 环境配置
 ├── .env.example            # API 配置模板
@@ -59,7 +59,7 @@ DEEPSEEK_MODEL=deepseek-chat
 
 也可以不写 `.env`，在 Streamlit 页面左侧手动输入 API Key。
 
-注意：`.env` 包含密钥，不能上传 GitHub。
+
 
 ## 运行项目
 
@@ -84,7 +84,7 @@ Ctrl + C
 
 ## 数据目录
 
-项目默认从 `data/` 读取 CSV。真实数据不会上传到 GitHub，需要本地自行放入。
+项目默认从 `data/` 读取 CSV。
 
 期望目录结构：
 
