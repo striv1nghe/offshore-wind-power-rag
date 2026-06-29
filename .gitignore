@@ -1,0 +1,10 @@
+.env
+.streamlit-home/
+.DS_Store
+.vscode/
+__pycache__/
+*.pyc
+outputs/
+data/**/*.csv
+data/.DS_Store
+data/**/.DS_Store

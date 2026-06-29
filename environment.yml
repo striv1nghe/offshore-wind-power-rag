@@ -1,0 +1,13 @@
+name: TRAG
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - streamlit==1.46.0
+      - scikit-learn==1.7.0
+      - openai==1.90.0
+      - python-dotenv==1.1.0
+      - requests==2.32.4
