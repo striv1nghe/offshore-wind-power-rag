@@ -10,6 +10,8 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from rag_core import (
+    EmbeddingRetriever,
+    Retriever,
     TfidfRetriever,
     answer_ollama,
     answer_openai_compatible,
@@ -41,6 +43,9 @@ from wind_data import (
 ROOT = Path(__file__).parent
 KNOWLEDGE_DIR = ROOT / "knowledge_base"
 DATA_DIR = ROOT / "data"
+TFIDF_RETRIEVAL = "TF-IDF 字符检索"
+EMBEDDING_RETRIEVAL = "Embedding 语义检索"
+DEFAULT_EMBEDDING_MODEL = str(ROOT / "models" / "bge-small-zh-v1.5")
 
 DISPLAY_COLUMN_NAMES = {
     TRUE_COL: "真实值_KW",
@@ -52,8 +57,11 @@ TIME_DISPLAY_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 @st.cache_resource
-def get_retriever() -> TfidfRetriever:
-    return TfidfRetriever(load_markdown_chunks(KNOWLEDGE_DIR))
+def get_retriever(method: str, embedding_model: str = DEFAULT_EMBEDDING_MODEL) -> Retriever:
+    chunks = load_markdown_chunks(KNOWLEDGE_DIR)
+    if method == EMBEDDING_RETRIEVAL:
+        return EmbeddingRetriever(chunks, model_name=embedding_model)
+    return TfidfRetriever(chunks)
 
 
 @st.cache_data
@@ -98,6 +106,8 @@ def main() -> None:
     if page == "知识库问答":
         retrieve_only = st.sidebar.checkbox("只测试检索，不调用大模型")
 
+    retrieval_config = collect_retrieval_config(page)
+
     needs_model = page == "直接问模型" or (
         page == "知识库问答" and not retrieve_only
     )
@@ -110,13 +120,13 @@ def main() -> None:
     model_config = collect_model_config(provider) if provider != "请选择" else {}
 
     if page == "知识库问答":
-        render_rag_page(provider, model_config, retrieve_only)
+        render_rag_page(provider, model_config, retrieve_only, retrieval_config)
     elif page == "直接问模型":
         render_direct_page(provider, model_config)
     elif page == "数据概览":
         render_data_overview_page()
     elif page == "数据分析与解释":
-        render_data_analysis_page(provider, model_config)
+        render_data_analysis_page(provider, model_config, retrieval_config)
 
 
 def init_history() -> None:
@@ -124,11 +134,15 @@ def init_history() -> None:
     st.session_state.setdefault("direct_history", [])
 
 
-def render_rag_page(provider: str, model_config: dict[str, str], retrieve_only: bool) -> None:
+def render_rag_page(
+    provider: str,
+    model_config: dict[str, str],
+    retrieve_only: bool,
+    retrieval_config: dict[str, str],
+) -> None:
     st.subheader("知识库问答")
     st.caption("先检索本地风电知识库，再让大模型基于召回片段回答。")
 
-    retriever = get_retriever()
     question = st.text_area(
         "输入一个风电预测问题",
         value="为什么风速波动时，风电功率预测误差会变大？",
@@ -140,6 +154,10 @@ def render_rag_page(provider: str, model_config: dict[str, str], retrieve_only: 
     if st.button("检索并生成回答", type="primary"):
         if not question.strip():
             st.warning("请先输入问题。")
+            return
+
+        retriever = load_selected_retriever(retrieval_config)
+        if retriever is None:
             return
 
         with st.spinner("正在检索知识库..."):
@@ -289,7 +307,11 @@ def render_data_overview_page() -> None:
     st.altair_chart(chart, use_container_width=True)
 
 
-def render_data_analysis_page(provider: str, model_config: dict[str, str]) -> None:
+def render_data_analysis_page(
+    provider: str,
+    model_config: dict[str, str],
+    retrieval_config: dict[str, str],
+) -> None:
     st.subheader("数据分析与解释")
     dataset = select_dataset()
     if not dataset:
@@ -305,7 +327,7 @@ def render_data_analysis_page(provider: str, model_config: dict[str, str]) -> No
     with tab_feature:
         render_feature_analysis(dataset, df)
     with tab_explain:
-        render_error_explanation(provider, model_config, dataset, df)
+        render_error_explanation(provider, model_config, retrieval_config, dataset, df)
 
 
 def render_prediction_visual(dataset: str, df) -> None:
@@ -594,7 +616,13 @@ def render_feature_analysis(dataset: str, df) -> None:
     st.altair_chart(scatter, use_container_width=True)
 
 
-def render_error_explanation(provider: str, model_config: dict[str, str], dataset: str, df) -> None:
+def render_error_explanation(
+    provider: str,
+    model_config: dict[str, str],
+    retrieval_config: dict[str, str],
+    dataset: str,
+    df,
+) -> None:
     st.subheader("误差解释")
     st.caption("把数据摘要和知识库片段一起发给大模型，不会发送完整 CSV。")
     data_summary = make_error_summary(dataset, df)
@@ -613,7 +641,9 @@ def render_error_explanation(provider: str, model_config: dict[str, str], datase
         if provider == "请选择":
             st.warning("请先在左侧选择大模型类型，再生成误差解释。")
             return
-        retriever = get_retriever()
+        retriever = load_selected_retriever(retrieval_config)
+        if retriever is None:
+            return
         search_query = (
             question
             + "\nRMSE MAE 预测误差 风速波动 桨距角 偏航 变桨 电网有功功率"
@@ -696,6 +726,50 @@ def collect_model_config(provider: str) -> dict[str, str]:
         }
 
     return {}
+
+
+def collect_retrieval_config(page: str) -> dict[str, str]:
+    if page not in {"知识库问答", "数据分析与解释"}:
+        return {"method": TFIDF_RETRIEVAL, "embedding_model": DEFAULT_EMBEDDING_MODEL}
+
+    st.sidebar.divider()
+    method = st.sidebar.selectbox(
+        "知识库检索方式",
+        [TFIDF_RETRIEVAL, EMBEDDING_RETRIEVAL],
+        help="TF-IDF 适合关键词匹配；Embedding 更适合语义相近但用词不同的问题。",
+    )
+    embedding_model = DEFAULT_EMBEDDING_MODEL
+    if method == EMBEDDING_RETRIEVAL:
+        embedding_model = st.sidebar.text_input(
+            "Embedding 模型",
+            value=os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+            help="第一次使用本地未缓存的模型时，sentence-transformers 会下载模型文件。",
+        ).strip() or DEFAULT_EMBEDDING_MODEL
+    return {"method": method, "embedding_model": embedding_model}
+
+
+def load_selected_retriever(retrieval_config: dict[str, str]) -> Retriever | None:
+    method = retrieval_config.get("method", TFIDF_RETRIEVAL)
+    embedding_model = resolve_embedding_model_path(
+        retrieval_config.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+    )
+    try:
+        with st.spinner(f"正在加载{method}..."):
+            return get_retriever(method, embedding_model)
+    except Exception as exc:
+        st.error(f"检索器加载失败：{exc}")
+        return None
+
+
+def resolve_embedding_model_path(model_name: str) -> str:
+    path = Path(model_name).expanduser()
+    if path.is_absolute() or "/" not in model_name:
+        return str(path)
+
+    project_path = ROOT / path
+    if project_path.exists():
+        return str(project_path)
+    return model_name
 
 
 def generate_answer(provider: str, config: dict[str, str], prompt: str) -> str:

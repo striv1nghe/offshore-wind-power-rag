@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
 
+import numpy as np
 import requests
 from openai import OpenAI
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -21,6 +22,11 @@ class Chunk:
 class SearchResult:
     chunk: Chunk
     score: float
+
+
+class Retriever(Protocol):
+    def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
+        ...
 
 
 def load_markdown_chunks(knowledge_dir: str | Path) -> list[Chunk]:
@@ -68,7 +74,7 @@ class TfidfRetriever:
         self.chunks = list(chunks)
         self.vectorizer = TfidfVectorizer(analyzer="char", ngram_range=(2, 4))
         self.matrix = self.vectorizer.fit_transform(
-            [f"{chunk.title}\n{chunk.text}" for chunk in self.chunks]
+            [chunk_to_search_text(chunk) for chunk in self.chunks]
         )
 
     def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
@@ -80,6 +86,48 @@ class TfidfRetriever:
             for index in ranked
             if scores[index] > 0
         ]
+
+
+class EmbeddingRetriever:
+    def __init__(
+        self,
+        chunks: Iterable[Chunk],
+        model_name: str = "BAAI/bge-small-zh-v1.5",
+    ):
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise ImportError(
+                "Embedding 检索需要安装 sentence-transformers。"
+                "请运行 pip install -r requirements.txt 后重试。"
+            ) from exc
+
+        self.chunks = list(chunks)
+        self.model_name = model_name
+        self.model = SentenceTransformer(model_name)
+        self.matrix = self.model.encode(
+            [chunk_to_search_text(chunk) for chunk in self.chunks],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+
+    def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
+        query_vector = self.model.encode(
+            [query],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )[0]
+        scores = np.asarray(self.matrix @ query_vector).ravel()
+        ranked = scores.argsort()[::-1][:top_k]
+        return [
+            SearchResult(chunk=self.chunks[index], score=float(scores[index]))
+            for index in ranked
+            if scores[index] > 0
+        ]
+
+
+def chunk_to_search_text(chunk: Chunk) -> str:
+    return f"{chunk.title}\n{chunk.text}"
 
 
 def build_prompt(question: str, results: list[SearchResult]) -> str:
