@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+from agent_core import run_wind_analysis_agent
 from rag_core import (
     TfidfRetriever,
     answer_ollama,
@@ -86,7 +87,7 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "页面",
-        ["知识库问答", "直接问模型", "数据概览", "数据分析与解释"],
+        ["知识库问答", "直接问模型", "数据概览", "数据分析与解释", "Agent 分析助手"],
     )
 
     provider = st.sidebar.selectbox(
@@ -98,7 +99,7 @@ def main() -> None:
     if page == "知识库问答":
         retrieve_only = st.sidebar.checkbox("只测试检索，不调用大模型")
 
-    needs_model = page == "直接问模型" or (
+    needs_model = page in {"直接问模型", "Agent 分析助手"} or (
         page == "知识库问答" and not retrieve_only
     )
     if provider == "请选择" and needs_model:
@@ -117,6 +118,8 @@ def main() -> None:
         render_data_overview_page()
     elif page == "数据分析与解释":
         render_data_analysis_page(provider, model_config)
+    elif page == "Agent 分析助手":
+        render_agent_page(provider, model_config)
 
 
 def init_history() -> None:
@@ -636,6 +639,68 @@ def render_error_explanation(provider: str, model_config: dict[str, str], datase
         if is_model_answer(answer):
             answer = append_reference_footer(answer, results)
         st.subheader("解释结果")
+        st.markdown(answer)
+
+
+def render_agent_page(provider: str, model_config: dict[str, str]) -> None:
+    st.subheader("Agent 分析助手")
+    st.caption("第一版是轻量工作流 Agent：它会自动调用数据分析工具、知识库检索工具，再让大模型生成报告。")
+
+    dataset_options = ["自动识别"] + get_dataset_names()
+    selected_dataset = st.selectbox("数据集", dataset_options, key="agent_dataset")
+    question = st.text_area(
+        "输入你的分析任务",
+        value="请分析 ps_13#_8MW 的预测误差为什么比较大，并给出下一步验证建议。",
+        height=110,
+        key="agent_question",
+    )
+
+    with st.expander("这一版 Agent 会做什么？", expanded=False):
+        st.markdown(
+            """
+            1. 识别要分析的数据集。
+            2. 调用数据概览工具，读取 RMSE、MAE、R2、MAPE。
+            3. 调用高误差样本工具，找误差最大的时间点。
+            4. 调用 Spearman 相关性工具，找和误差相关的输入变量。
+            5. 调用知识库检索工具，找风电机理解释。
+            6. 让大模型基于这些证据生成结构化报告。
+            """
+        )
+
+    if st.button("运行 Agent 分析", type="primary"):
+        if not question.strip():
+            st.warning("请先输入分析任务。")
+            return
+        if provider == "请选择":
+            st.warning("请先在左侧选择大模型类型。")
+            return
+
+        with st.spinner("Agent 正在调用工具..."):
+            agent_run = run_wind_analysis_agent(
+                question=question,
+                selected_dataset=selected_dataset,
+                retriever=get_retriever(),
+                data_dir=DATA_DIR,
+            )
+
+        st.subheader("Agent 工具调用过程")
+        for index, trace in enumerate(agent_run.tool_traces, start=1):
+            with st.expander(f"{index}. {trace.name} - {trace.purpose}", expanded=index == 1):
+                st.text(trace.output)
+
+        if agent_run.search_results:
+            st.subheader("知识库召回")
+            show_results(agent_run.search_results)
+
+        with st.expander("最终发送给大模型的 Prompt", expanded=False):
+            st.code(agent_run.final_prompt, language="markdown")
+
+        with st.spinner("正在生成 Agent 分析报告..."):
+            answer = generate_answer(provider, model_config, agent_run.final_prompt)
+        if is_model_answer(answer):
+            answer = append_reference_footer(answer, agent_run.search_results)
+
+        st.subheader("Agent 分析报告")
         st.markdown(answer)
 
 
