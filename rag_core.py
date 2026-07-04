@@ -126,6 +126,44 @@ class EmbeddingRetriever:
         ]
 
 
+class HybridRetriever:
+    def __init__(
+        self,
+        chunks: Iterable[Chunk],
+        embedding_model_name: str = "BAAI/bge-small-zh-v1.5",
+        rrf_k: int = 60,
+        candidate_multiplier: int = 3,
+    ):
+        self.chunks = list(chunks)
+        self.tfidf_retriever = TfidfRetriever(self.chunks)
+        self.embedding_retriever = EmbeddingRetriever(
+            self.chunks,
+            model_name=embedding_model_name,
+        )
+        self.rrf_k = rrf_k
+        self.candidate_multiplier = candidate_multiplier
+
+    def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
+        candidate_k = max(top_k * self.candidate_multiplier, 8)
+        result_lists = [
+            self.tfidf_retriever.search(query, top_k=candidate_k),
+            self.embedding_retriever.search(query, top_k=candidate_k),
+        ]
+        scores: dict[Chunk, float] = {}
+
+        for results in result_lists:
+            for rank, result in enumerate(results, start=1):
+                scores[result.chunk] = scores.get(result.chunk, 0.0) + (
+                    1.0 / (self.rrf_k + rank)
+                )
+
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        return [
+            SearchResult(chunk=chunk, score=float(score))
+            for chunk, score in ranked[:top_k]
+        ]
+
+
 def chunk_to_search_text(chunk: Chunk) -> str:
     return f"{chunk.title}\n{chunk.text}"
 

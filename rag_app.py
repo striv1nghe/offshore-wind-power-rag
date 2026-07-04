@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from rag_core import (
     EmbeddingRetriever,
+    HybridRetriever,
     Retriever,
     TfidfRetriever,
     answer_ollama,
@@ -43,6 +44,7 @@ from wind_data import (
 ROOT = Path(__file__).parent
 KNOWLEDGE_DIR = ROOT / "knowledge_base"
 DATA_DIR = ROOT / "data"
+HYBRID_RETRIEVAL = "Hybrid 混合检索"
 TFIDF_RETRIEVAL = "TF-IDF 字符检索"
 EMBEDDING_RETRIEVAL = "Embedding 语义检索"
 DEFAULT_EMBEDDING_MODEL = str(ROOT / "models" / "bge-small-zh-v1.5")
@@ -59,6 +61,8 @@ TIME_DISPLAY_FORMAT = "%Y-%m-%d %H:%M:%S"
 @st.cache_resource
 def get_retriever(method: str, embedding_model: str = DEFAULT_EMBEDDING_MODEL) -> Retriever:
     chunks = load_markdown_chunks(KNOWLEDGE_DIR)
+    if method == HYBRID_RETRIEVAL:
+        return HybridRetriever(chunks, embedding_model_name=embedding_model)
     if method == EMBEDDING_RETRIEVAL:
         return EmbeddingRetriever(chunks, model_name=embedding_model)
     return TfidfRetriever(chunks)
@@ -94,35 +98,24 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "页面",
-        ["知识库问答", "直接问模型", "数据概览", "数据分析与解释"],
+        ["知识库问答", "数据概览", "数据分析与解释"],
     )
 
+    provider_options = ["请选择", "OpenAI / 兼容 API", "DeepSeek", "Ollama 本地模型"]
     provider = st.sidebar.selectbox(
         "选择大模型类型",
-        ["请选择", "OpenAI / 兼容 API", "DeepSeek", "Ollama 本地模型"],
+        provider_options,
+        index=provider_options.index(infer_default_provider()),
+        help="会根据 .env 中已填写的配置自动选择，也可以在这里手动切换。",
     )
-
-    retrieve_only = False
-    if page == "知识库问答":
-        retrieve_only = st.sidebar.checkbox("只测试检索，不调用大模型")
 
     retrieval_config = collect_retrieval_config(page)
-
-    needs_model = page == "直接问模型" or (
-        page == "知识库问答" and not retrieve_only
-    )
-    if provider == "请选择" and needs_model:
-        st.info("请先在左侧选择要接入的大模型类型。")
-        st.write("可选方向：云端 OpenAI 兼容接口、DeepSeek 或本地 Ollama。")
-        return
 
     st.sidebar.divider()
     model_config = collect_model_config(provider) if provider != "请选择" else {}
 
     if page == "知识库问答":
-        render_rag_page(provider, model_config, retrieve_only, retrieval_config)
-    elif page == "直接问模型":
-        render_direct_page(provider, model_config)
+        render_rag_page(provider, model_config, retrieval_config)
     elif page == "数据概览":
         render_data_overview_page()
     elif page == "数据分析与解释":
@@ -137,10 +130,19 @@ def init_history() -> None:
 def render_rag_page(
     provider: str,
     model_config: dict[str, str],
-    retrieve_only: bool,
     retrieval_config: dict[str, str],
 ) -> None:
     st.subheader("知识库问答")
+    answer_mode = st.radio(
+        "问答模式",
+        ["知识库 RAG", "直接问模型"],
+        horizontal=True,
+    )
+
+    if answer_mode == "直接问模型":
+        render_direct_page(provider, model_config)
+        return
+
     st.caption("先检索本地风电知识库，再让大模型基于召回片段回答。")
 
     question = st.text_area(
@@ -150,10 +152,14 @@ def render_rag_page(
         key="rag_question",
     )
     top_k = st.slider("召回片段数量", min_value=1, max_value=8, value=4)
+    retrieve_only = st.checkbox("只测试检索，不调用大模型")
 
     if st.button("检索并生成回答", type="primary"):
         if not question.strip():
             st.warning("请先输入问题。")
+            return
+        if provider == "请选择" and not retrieve_only:
+            st.warning("请先在左侧选择要接入的大模型类型，或勾选只测试检索。")
             return
 
         retriever = load_selected_retriever(retrieval_config)
@@ -209,6 +215,9 @@ def render_direct_page(provider: str, model_config: dict[str, str]) -> None:
     if st.button("直接生成回答", type="primary"):
         if not question.strip():
             st.warning("请先输入问题。")
+            return
+        if provider == "请选择":
+            st.warning("请先在左侧选择要接入的大模型类型。")
             return
 
         prompt = build_direct_prompt(question)
@@ -677,6 +686,16 @@ def select_dataset() -> str | None:
     return st.selectbox("选择数据集", datasets)
 
 
+def infer_default_provider() -> str:
+    if os.getenv("DEEPSEEK_API_KEY") and os.getenv("DEEPSEEK_MODEL"):
+        return "DeepSeek"
+    if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_MODEL"):
+        return "OpenAI / 兼容 API"
+    if os.getenv("OLLAMA_MODEL"):
+        return "Ollama 本地模型"
+    return "请选择"
+
+
 def collect_model_config(provider: str) -> dict[str, str]:
     if provider == "DeepSeek":
         return {
@@ -730,16 +749,16 @@ def collect_model_config(provider: str) -> dict[str, str]:
 
 def collect_retrieval_config(page: str) -> dict[str, str]:
     if page not in {"知识库问答", "数据分析与解释"}:
-        return {"method": TFIDF_RETRIEVAL, "embedding_model": DEFAULT_EMBEDDING_MODEL}
+        return {"method": HYBRID_RETRIEVAL, "embedding_model": DEFAULT_EMBEDDING_MODEL}
 
     st.sidebar.divider()
     method = st.sidebar.selectbox(
         "知识库检索方式",
-        [TFIDF_RETRIEVAL, EMBEDDING_RETRIEVAL],
-        help="TF-IDF 适合关键词匹配；Embedding 更适合语义相近但用词不同的问题。",
+        [HYBRID_RETRIEVAL, EMBEDDING_RETRIEVAL, TFIDF_RETRIEVAL],
+        help="Hybrid 会融合关键词和语义检索；TF-IDF 适合关键词匹配，Embedding 适合语义相近但用词不同的问题。",
     )
     embedding_model = DEFAULT_EMBEDDING_MODEL
-    if method == EMBEDDING_RETRIEVAL:
+    if method in {HYBRID_RETRIEVAL, EMBEDDING_RETRIEVAL}:
         embedding_model = st.sidebar.text_input(
             "Embedding 模型",
             value=os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
@@ -823,7 +842,7 @@ def render_rag_history() -> None:
                 st.caption("本次召回片段")
                 for result in item["results"]:
                     st.write(
-                        f"{result.chunk.source} / {result.chunk.title} - 相似度 {result.score:.3f}"
+                        f"{result.chunk.source} / {result.chunk.title} - 相关度 {result.score:.3f}"
                     )
 
 
@@ -848,7 +867,7 @@ def show_results(results) -> None:
     st.subheader("召回片段")
     for result in results:
         with st.expander(
-            f"{result.chunk.source} / {result.chunk.title} - 相似度 {result.score:.3f}"
+            f"{result.chunk.source} / {result.chunk.title} - 相关度 {result.score:.3f}"
         ):
             st.write(result.chunk.text)
 
