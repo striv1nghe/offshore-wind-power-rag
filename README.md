@@ -174,6 +174,20 @@ Hybrid 检索会分别运行 TF-IDF 和 embedding 检索，再用 RRF（Reciproc
 
 Embedding 检索暂时不引入向量数据库，而是直接在内存中保存知识库向量并计算相似度。当前 Markdown 知识库规模较小，这样更轻量；后续如果知识库规模变大，可以升级为 FAISS / Chroma。
 
+检索前会对少量常见风电诊断问法做领域查询扩展，例如把“风很大但发电不多”补充为“高风速低功率、限功率、偏航误差、桨距角、设备保护”等关键词，帮助 Hybrid 混合检索召回更完整的机理片段。
+
+### 检索评测
+
+项目提供了一个轻量评测脚本，用人工标注的期望来源对比 TF-IDF、Embedding 和 Hybrid 的文件级 Precision / Recall：
+
+```bash
+conda activate TRAG
+python eval_retrieval.py
+python eval_retrieval.py --top-k 6 --details
+```
+
+评测集位于 `eval_retrieval.py` 中，适合快速观察不同检索方式在小样本问题上的召回差异。它是工程 sanity check，不是严格学术 benchmark；如果知识库内容继续扩展，应同步补充或修正评测问题和期望来源。
+
 ## 后续方向
 
 - 将 CSV 数据导入 SQLite，支持上传和长期管理。

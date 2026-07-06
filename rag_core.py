@@ -78,7 +78,7 @@ class TfidfRetriever:
         )
 
     def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
-        query_vector = self.vectorizer.transform([query])
+        query_vector = self.vectorizer.transform([expand_query(query)])
         scores = cosine_similarity(query_vector, self.matrix).ravel()
         ranked = scores.argsort()[::-1][:top_k]
         return [
@@ -113,7 +113,7 @@ class EmbeddingRetriever:
 
     def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
         query_vector = self.model.encode(
-            [query],
+            [expand_query(query)],
             normalize_embeddings=True,
             show_progress_bar=False,
         )[0]
@@ -166,6 +166,33 @@ class HybridRetriever:
 
 def chunk_to_search_text(chunk: Chunk) -> str:
     return f"{chunk.title}\n{chunk.text}"
+
+
+def expand_query(query: str) -> str:
+    """Add domain terms for common wind-power diagnostic phrasings."""
+    compact_query = "".join(query.split())
+    expansions: list[str] = []
+
+    high_wind_low_power = any(
+        phrase in compact_query
+        for phrase in [
+            "风很大但发电不多",
+            "风大但发电不多",
+            "风速高但功率低",
+            "高风速低功率",
+            "风速高但发电少",
+            "风速高但功率不上升",
+            "风速高但功率没有继续上升",
+            "风很大但功率低",
+        ]
+    )
+    if high_wind_low_power:
+        expansions.append(
+            "高风速低功率 限功率 限电 调度限发 偏航误差 桨距角 "
+            "变桨控制 设备保护 停机维护 SCADA异常 功率曲线偏离 模型高估"
+        )
+
+    return "\n".join([query, *expansions])
 
 
 def build_prompt(question: str, results: list[SearchResult]) -> str:
