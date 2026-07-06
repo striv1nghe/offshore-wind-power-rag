@@ -2,9 +2,11 @@
 .streamlit-home/
 .DS_Store
 .vscode/
+.venv/
 __pycache__/
 *.pyc
 outputs/
+models/
 data/**/*.csv
 data/.DS_Store
 data/**/.DS_Store

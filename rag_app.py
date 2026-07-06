@@ -10,6 +10,9 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from rag_core import (
+    EmbeddingRetriever,
+    HybridRetriever,
+    Retriever,
     TfidfRetriever,
     answer_ollama,
     answer_openai_compatible,
@@ -41,6 +44,10 @@ from wind_data import (
 ROOT = Path(__file__).parent
 KNOWLEDGE_DIR = ROOT / "knowledge_base"
 DATA_DIR = ROOT / "data"
+HYBRID_RETRIEVAL = "Hybrid 混合检索"
+TFIDF_RETRIEVAL = "TF-IDF 字符检索"
+EMBEDDING_RETRIEVAL = "Embedding 语义检索"
+DEFAULT_EMBEDDING_MODEL = str(ROOT / "models" / "bge-small-zh-v1.5")
 
 DISPLAY_COLUMN_NAMES = {
     TRUE_COL: "真实值_KW",
@@ -52,8 +59,13 @@ TIME_DISPLAY_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 @st.cache_resource
-def get_retriever() -> TfidfRetriever:
-    return TfidfRetriever(load_markdown_chunks(KNOWLEDGE_DIR))
+def get_retriever(method: str, embedding_model: str = DEFAULT_EMBEDDING_MODEL) -> Retriever:
+    chunks = load_markdown_chunks(KNOWLEDGE_DIR)
+    if method == HYBRID_RETRIEVAL:
+        return HybridRetriever(chunks, embedding_model_name=embedding_model)
+    if method == EMBEDDING_RETRIEVAL:
+        return EmbeddingRetriever(chunks, model_name=embedding_model)
+    return TfidfRetriever(chunks)
 
 
 @st.cache_data
@@ -86,37 +98,28 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "页面",
-        ["知识库问答", "直接问模型", "数据概览", "数据分析与解释"],
+        ["知识库问答", "数据概览", "数据分析与解释"],
     )
 
+    provider_options = ["请选择", "OpenAI / 兼容 API", "DeepSeek", "Ollama 本地模型"]
     provider = st.sidebar.selectbox(
         "选择大模型类型",
-        ["请选择", "OpenAI / 兼容 API", "DeepSeek", "Ollama 本地模型"],
+        provider_options,
+        index=provider_options.index(infer_default_provider()),
+        help="会根据 .env 中已填写的配置自动选择，也可以在这里手动切换。",
     )
 
-    retrieve_only = False
-    if page == "知识库问答":
-        retrieve_only = st.sidebar.checkbox("只测试检索，不调用大模型")
-
-    needs_model = page == "直接问模型" or (
-        page == "知识库问答" and not retrieve_only
-    )
-    if provider == "请选择" and needs_model:
-        st.info("请先在左侧选择要接入的大模型类型。")
-        st.write("可选方向：云端 OpenAI 兼容接口、DeepSeek 或本地 Ollama。")
-        return
+    retrieval_config = collect_retrieval_config(page)
 
     st.sidebar.divider()
     model_config = collect_model_config(provider) if provider != "请选择" else {}
 
     if page == "知识库问答":
-        render_rag_page(provider, model_config, retrieve_only)
-    elif page == "直接问模型":
-        render_direct_page(provider, model_config)
+        render_rag_page(provider, model_config, retrieval_config)
     elif page == "数据概览":
         render_data_overview_page()
     elif page == "数据分析与解释":
-        render_data_analysis_page(provider, model_config)
+        render_data_analysis_page(provider, model_config, retrieval_config)
 
 
 def init_history() -> None:
@@ -124,11 +127,24 @@ def init_history() -> None:
     st.session_state.setdefault("direct_history", [])
 
 
-def render_rag_page(provider: str, model_config: dict[str, str], retrieve_only: bool) -> None:
+def render_rag_page(
+    provider: str,
+    model_config: dict[str, str],
+    retrieval_config: dict[str, str],
+) -> None:
     st.subheader("知识库问答")
+    answer_mode = st.radio(
+        "问答模式",
+        ["知识库 RAG", "直接问模型"],
+        horizontal=True,
+    )
+
+    if answer_mode == "直接问模型":
+        render_direct_page(provider, model_config)
+        return
+
     st.caption("先检索本地风电知识库，再让大模型基于召回片段回答。")
 
-    retriever = get_retriever()
     question = st.text_area(
         "输入一个风电预测问题",
         value="为什么风速波动时，风电功率预测误差会变大？",
@@ -136,10 +152,18 @@ def render_rag_page(provider: str, model_config: dict[str, str], retrieve_only: 
         key="rag_question",
     )
     top_k = st.slider("召回片段数量", min_value=1, max_value=8, value=4)
+    retrieve_only = st.checkbox("只测试检索，不调用大模型")
 
     if st.button("检索并生成回答", type="primary"):
         if not question.strip():
             st.warning("请先输入问题。")
+            return
+        if provider == "请选择" and not retrieve_only:
+            st.warning("请先在左侧选择要接入的大模型类型，或勾选只测试检索。")
+            return
+
+        retriever = load_selected_retriever(retrieval_config)
+        if retriever is None:
             return
 
         with st.spinner("正在检索知识库..."):
@@ -191,6 +215,9 @@ def render_direct_page(provider: str, model_config: dict[str, str]) -> None:
     if st.button("直接生成回答", type="primary"):
         if not question.strip():
             st.warning("请先输入问题。")
+            return
+        if provider == "请选择":
+            st.warning("请先在左侧选择要接入的大模型类型。")
             return
 
         prompt = build_direct_prompt(question)
@@ -289,7 +316,11 @@ def render_data_overview_page() -> None:
     st.altair_chart(chart, use_container_width=True)
 
 
-def render_data_analysis_page(provider: str, model_config: dict[str, str]) -> None:
+def render_data_analysis_page(
+    provider: str,
+    model_config: dict[str, str],
+    retrieval_config: dict[str, str],
+) -> None:
     st.subheader("数据分析与解释")
     dataset = select_dataset()
     if not dataset:
@@ -305,7 +336,7 @@ def render_data_analysis_page(provider: str, model_config: dict[str, str]) -> No
     with tab_feature:
         render_feature_analysis(dataset, df)
     with tab_explain:
-        render_error_explanation(provider, model_config, dataset, df)
+        render_error_explanation(provider, model_config, retrieval_config, dataset, df)
 
 
 def render_prediction_visual(dataset: str, df) -> None:
@@ -594,7 +625,13 @@ def render_feature_analysis(dataset: str, df) -> None:
     st.altair_chart(scatter, use_container_width=True)
 
 
-def render_error_explanation(provider: str, model_config: dict[str, str], dataset: str, df) -> None:
+def render_error_explanation(
+    provider: str,
+    model_config: dict[str, str],
+    retrieval_config: dict[str, str],
+    dataset: str,
+    df,
+) -> None:
     st.subheader("误差解释")
     st.caption("把数据摘要和知识库片段一起发给大模型，不会发送完整 CSV。")
     data_summary = make_error_summary(dataset, df)
@@ -613,7 +650,9 @@ def render_error_explanation(provider: str, model_config: dict[str, str], datase
         if provider == "请选择":
             st.warning("请先在左侧选择大模型类型，再生成误差解释。")
             return
-        retriever = get_retriever()
+        retriever = load_selected_retriever(retrieval_config)
+        if retriever is None:
+            return
         search_query = (
             question
             + "\nRMSE MAE 预测误差 风速波动 桨距角 偏航 变桨 电网有功功率"
@@ -645,6 +684,16 @@ def select_dataset() -> str | None:
         st.warning("没有在 data/INPUT 下找到特征数据。")
         return None
     return st.selectbox("选择数据集", datasets)
+
+
+def infer_default_provider() -> str:
+    if os.getenv("DEEPSEEK_API_KEY") and os.getenv("DEEPSEEK_MODEL"):
+        return "DeepSeek"
+    if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_MODEL"):
+        return "OpenAI / 兼容 API"
+    if os.getenv("OLLAMA_MODEL"):
+        return "Ollama 本地模型"
+    return "请选择"
 
 
 def collect_model_config(provider: str) -> dict[str, str]:
@@ -698,6 +747,50 @@ def collect_model_config(provider: str) -> dict[str, str]:
     return {}
 
 
+def collect_retrieval_config(page: str) -> dict[str, str]:
+    if page not in {"知识库问答", "数据分析与解释"}:
+        return {"method": HYBRID_RETRIEVAL, "embedding_model": DEFAULT_EMBEDDING_MODEL}
+
+    st.sidebar.divider()
+    method = st.sidebar.selectbox(
+        "知识库检索方式",
+        [HYBRID_RETRIEVAL, EMBEDDING_RETRIEVAL, TFIDF_RETRIEVAL],
+        help="Hybrid 会融合关键词和语义检索；TF-IDF 适合关键词匹配，Embedding 适合语义相近但用词不同的问题。",
+    )
+    embedding_model = DEFAULT_EMBEDDING_MODEL
+    if method in {HYBRID_RETRIEVAL, EMBEDDING_RETRIEVAL}:
+        embedding_model = st.sidebar.text_input(
+            "Embedding 模型",
+            value=os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+            help="第一次使用本地未缓存的模型时，sentence-transformers 会下载模型文件。",
+        ).strip() or DEFAULT_EMBEDDING_MODEL
+    return {"method": method, "embedding_model": embedding_model}
+
+
+def load_selected_retriever(retrieval_config: dict[str, str]) -> Retriever | None:
+    method = retrieval_config.get("method", TFIDF_RETRIEVAL)
+    embedding_model = resolve_embedding_model_path(
+        retrieval_config.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+    )
+    try:
+        with st.spinner(f"正在加载{method}..."):
+            return get_retriever(method, embedding_model)
+    except Exception as exc:
+        st.error(f"检索器加载失败：{exc}")
+        return None
+
+
+def resolve_embedding_model_path(model_name: str) -> str:
+    path = Path(model_name).expanduser()
+    if path.is_absolute() or "/" not in model_name:
+        return str(path)
+
+    project_path = ROOT / path
+    if project_path.exists():
+        return str(project_path)
+    return model_name
+
+
 def generate_answer(provider: str, config: dict[str, str], prompt: str) -> str:
     try:
         if provider in {"OpenAI / 兼容 API", "DeepSeek"}:
@@ -749,7 +842,7 @@ def render_rag_history() -> None:
                 st.caption("本次召回片段")
                 for result in item["results"]:
                     st.write(
-                        f"{result.chunk.source} / {result.chunk.title} - 相似度 {result.score:.3f}"
+                        f"{result.chunk.source} / {result.chunk.title} - 相关度 {result.score:.3f}"
                     )
 
 
@@ -774,7 +867,7 @@ def show_results(results) -> None:
     st.subheader("召回片段")
     for result in results:
         with st.expander(
-            f"{result.chunk.source} / {result.chunk.title} - 相似度 {result.score:.3f}"
+            f"{result.chunk.source} / {result.chunk.title} - 相关度 {result.score:.3f}"
         ):
             st.write(result.chunk.text)
 

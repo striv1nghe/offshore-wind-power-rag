@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
 
+import numpy as np
 import requests
 from openai import OpenAI
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -21,6 +22,11 @@ class Chunk:
 class SearchResult:
     chunk: Chunk
     score: float
+
+
+class Retriever(Protocol):
+    def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
+        ...
 
 
 def load_markdown_chunks(knowledge_dir: str | Path) -> list[Chunk]:
@@ -68,11 +74,11 @@ class TfidfRetriever:
         self.chunks = list(chunks)
         self.vectorizer = TfidfVectorizer(analyzer="char", ngram_range=(2, 4))
         self.matrix = self.vectorizer.fit_transform(
-            [f"{chunk.title}\n{chunk.text}" for chunk in self.chunks]
+            [chunk_to_search_text(chunk) for chunk in self.chunks]
         )
 
     def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
-        query_vector = self.vectorizer.transform([query])
+        query_vector = self.vectorizer.transform([expand_query(query)])
         scores = cosine_similarity(query_vector, self.matrix).ravel()
         ranked = scores.argsort()[::-1][:top_k]
         return [
@@ -80,6 +86,113 @@ class TfidfRetriever:
             for index in ranked
             if scores[index] > 0
         ]
+
+
+class EmbeddingRetriever:
+    def __init__(
+        self,
+        chunks: Iterable[Chunk],
+        model_name: str = "BAAI/bge-small-zh-v1.5",
+    ):
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise ImportError(
+                "Embedding 检索需要安装 sentence-transformers。"
+                "请运行 pip install -r requirements.txt 后重试。"
+            ) from exc
+
+        self.chunks = list(chunks)
+        self.model_name = model_name
+        self.model = SentenceTransformer(model_name)
+        self.matrix = self.model.encode(
+            [chunk_to_search_text(chunk) for chunk in self.chunks],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+
+    def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
+        query_vector = self.model.encode(
+            [expand_query(query)],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )[0]
+        scores = np.asarray(self.matrix @ query_vector).ravel()
+        ranked = scores.argsort()[::-1][:top_k]
+        return [
+            SearchResult(chunk=self.chunks[index], score=float(scores[index]))
+            for index in ranked
+            if scores[index] > 0
+        ]
+
+
+class HybridRetriever:
+    def __init__(
+        self,
+        chunks: Iterable[Chunk],
+        embedding_model_name: str = "BAAI/bge-small-zh-v1.5",
+        rrf_k: int = 60,
+        candidate_multiplier: int = 3,
+    ):
+        self.chunks = list(chunks)
+        self.tfidf_retriever = TfidfRetriever(self.chunks)
+        self.embedding_retriever = EmbeddingRetriever(
+            self.chunks,
+            model_name=embedding_model_name,
+        )
+        self.rrf_k = rrf_k
+        self.candidate_multiplier = candidate_multiplier
+
+    def search(self, query: str, top_k: int = 4) -> list[SearchResult]:
+        candidate_k = max(top_k * self.candidate_multiplier, 8)
+        result_lists = [
+            self.tfidf_retriever.search(query, top_k=candidate_k),
+            self.embedding_retriever.search(query, top_k=candidate_k),
+        ]
+        scores: dict[Chunk, float] = {}
+
+        for results in result_lists:
+            for rank, result in enumerate(results, start=1):
+                scores[result.chunk] = scores.get(result.chunk, 0.0) + (
+                    1.0 / (self.rrf_k + rank)
+                )
+
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        return [
+            SearchResult(chunk=chunk, score=float(score))
+            for chunk, score in ranked[:top_k]
+        ]
+
+
+def chunk_to_search_text(chunk: Chunk) -> str:
+    return f"{chunk.title}\n{chunk.text}"
+
+
+def expand_query(query: str) -> str:
+    """Add domain terms for common wind-power diagnostic phrasings."""
+    compact_query = "".join(query.split())
+    expansions: list[str] = []
+
+    high_wind_low_power = any(
+        phrase in compact_query
+        for phrase in [
+            "风很大但发电不多",
+            "风大但发电不多",
+            "风速高但功率低",
+            "高风速低功率",
+            "风速高但发电少",
+            "风速高但功率不上升",
+            "风速高但功率没有继续上升",
+            "风很大但功率低",
+        ]
+    )
+    if high_wind_low_power:
+        expansions.append(
+            "高风速低功率 限功率 限电 调度限发 偏航误差 桨距角 "
+            "变桨控制 设备保护 停机维护 SCADA异常 功率曲线偏离 模型高估"
+        )
+
+    return "\n".join([query, *expansions])
 
 
 def build_prompt(question: str, results: list[SearchResult]) -> str:
