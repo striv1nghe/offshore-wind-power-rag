@@ -606,23 +606,134 @@ def render_feature_analysis(dataset: str, df) -> None:
     )
     st.altair_chart(bar, use_container_width=True)
 
-    feature = st.selectbox("选择一个变量查看它和绝对误差的关系", corr["feature"].tolist())
-    scatter_df = downsample_frame(df[[TIME_COL, feature, ABS_ERROR_COL]], max_rows=2000)
-    scatter = (
-        alt.Chart(scatter_df)
-        .mark_circle(size=22, opacity=0.45)
-        .encode(
-            x=alt.X(f"{feature}:Q", title=feature),
-            y=alt.Y(f"{ABS_ERROR_COL}:Q", title="绝对误差 kW"),
-            tooltip=[
-                time_tooltip(),
-                alt.Tooltip(f"{feature}:Q", format=".3f"),
-                alt.Tooltip(f"{ABS_ERROR_COL}:Q", format=".3f"),
-            ],
-        )
-        .properties(height=320)
+    feature_options = corr["feature"].tolist()
+    feature = st.selectbox(
+        "选择一个变量查看它和绝对误差的时序关系",
+        feature_options,
+        key=f"feature_3d_{dataset}",
     )
-    st.altair_chart(scatter, use_container_width=True)
+    render_3d_error_scatter(df, feature)
+
+
+def render_3d_error_scatter(df, feature: str) -> None:
+    try:
+        import plotly.express as px
+    except ImportError:
+        st.warning("3D 图表需要安装 plotly。请运行 pip install -r requirements.txt 后重试。")
+        return
+
+    scatter_df = downsample_frame(
+        df[[TIME_COL, feature, ABS_ERROR_COL, ERROR_COL]],
+        max_rows=2500,
+    ).dropna()
+    if scatter_df.empty:
+        st.warning("当前变量没有可用于绘制 3D 图表的有效数据。")
+        return
+
+    scatter_df = scatter_df.copy()
+    scatter_df["时间文本"] = scatter_df[TIME_COL].dt.strftime(TIME_DISPLAY_FORMAT)
+    start_time = scatter_df[TIME_COL].min()
+    scatter_df["距起始时间_小时"] = (
+        scatter_df[TIME_COL] - start_time
+    ).dt.total_seconds() / 3600
+    tick_values, tick_text = make_time_axis_ticks(scatter_df)
+
+    error_min = float(scatter_df[ABS_ERROR_COL].min())
+    error_max = float(scatter_df[ABS_ERROR_COL].max())
+    color_range = [error_min, error_max] if error_min < error_max else None
+
+    fig = px.scatter_3d(
+        scatter_df,
+        x="距起始时间_小时",
+        y=feature,
+        z=ABS_ERROR_COL,
+        color=ABS_ERROR_COL,
+        color_continuous_scale="Viridis",
+        range_color=color_range,
+        opacity=0.82,
+        hover_data={
+            "时间文本": True,
+            "距起始时间_小时": ":.2f",
+            feature: ":.3f",
+            ABS_ERROR_COL: ":.3f",
+            ERROR_COL: ":.3f",
+            TIME_COL: False,
+        },
+        labels={
+            "距起始时间_小时": "时间（距起始小时）",
+            feature: display_column_name(feature),
+            ABS_ERROR_COL: "绝对误差 kW",
+            ERROR_COL: "误差 kW",
+            "时间文本": "时间",
+        },
+    )
+    fig.update_traces(marker={"size": 4.5, "line": {"width": 0}})
+    fig.update_layout(
+        height=560,
+        margin={"l": 0, "r": 0, "t": 24, "b": 0},
+        scene={
+            "xaxis": {
+                "title": "时间",
+                "tickmode": "array",
+                "tickvals": tick_values,
+                "ticktext": tick_text,
+            },
+            "yaxis_title": display_column_name(feature),
+            "zaxis_title": "绝对误差 kW",
+            "camera": {"eye": {"x": 1.55, "y": 1.65, "z": 1.05}},
+        },
+        coloraxis_colorbar={"title": "绝对误差 kW"},
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    render_3d_scatter_interpretation(scatter_df, feature)
+
+
+def make_time_axis_ticks(scatter_df: pd.DataFrame) -> tuple[list[float], list[str]]:
+    ticks = (
+        scatter_df[[TIME_COL, "距起始时间_小时"]]
+        .drop_duplicates()
+        .sort_values(TIME_COL)
+        .reset_index(drop=True)
+    )
+    if ticks.empty:
+        return [], []
+
+    if len(ticks) <= 6:
+        tick_rows = ticks
+    else:
+        indexes = sorted({round(index * (len(ticks) - 1) / 5) for index in range(6)})
+        tick_rows = ticks.iloc[indexes]
+
+    return (
+        tick_rows["距起始时间_小时"].astype(float).tolist(),
+        tick_rows[TIME_COL].dt.strftime("%m-%d %H:%M").tolist(),
+    )
+
+
+def render_3d_scatter_interpretation(scatter_df: pd.DataFrame, feature: str) -> None:
+    high_error_threshold = scatter_df[ABS_ERROR_COL].quantile(0.9)
+    high_error_df = scatter_df[scatter_df[ABS_ERROR_COL] >= high_error_threshold]
+    if high_error_df.empty:
+        return
+
+    high_error_ratio = len(high_error_df) / len(scatter_df)
+    time_start = high_error_df[TIME_COL].min().strftime(TIME_DISPLAY_FORMAT)
+    time_end = high_error_df[TIME_COL].max().strftime(TIME_DISPLAY_FORMAT)
+    feature_low = high_error_df[feature].quantile(0.25)
+    feature_high = high_error_df[feature].quantile(0.75)
+    max_error = high_error_df[ABS_ERROR_COL].max()
+
+    st.markdown(
+        f"""
+**图表解读**
+
+每个点代表一个时间样本。横轴是时间，纵轴是 `{display_column_name(feature)}`，高度表示该样本的绝对误差；颜色也表示绝对误差大小，颜色越接近色带高值，误差越大。
+
+当前最高 10% 误差样本约占 {high_error_ratio:.1%}，最大绝对误差为 {max_error:.2f} kW。这些高误差点覆盖的时间范围是 {time_start} 至 {time_end}，对应的 `{display_column_name(feature)}` 中间 50% 取值约为 {feature_low:.3f} 至 {feature_high:.3f}。
+
+如果高误差点沿时间方向集中，说明误差可能与该时间段的工况变化、限功率、控制策略或数据质量有关。如果高误差点集中在某个变量取值范围，说明模型在该变量区间的预测稳定性较弱，需要结合功率曲线、控制量和异常记录进一步分析。
+"""
+    )
 
 
 def render_error_explanation(

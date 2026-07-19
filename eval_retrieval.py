@@ -97,19 +97,190 @@ EVAL_CASES = [
 ]
 
 
+EVAL_CASES_2 = EVAL_CASES + [
+    EvalCase(
+        question="为什么 RMSE 很高但 MAE 看起来还可以？",
+        expected_sources={
+            "07_预测误差.md",
+            "02_风速波动.md",
+            "06_SCADA异常.md",
+        },
+    ),
+    EvalCase(
+        question="MAPE 在低功率或停机样本里为什么不稳定？",
+        expected_sources={
+            "07_预测误差.md",
+            "06_SCADA异常.md",
+        },
+    ),
+    EvalCase(
+        question="RRF 在混合检索里是怎么融合排序的？",
+        expected_sources={
+            "12_RAG检索策略与混合检索.md",
+        },
+    ),
+    EvalCase(
+        question="同一个风速为什么会对应多个不同功率？",
+        expected_sources={
+            "01_风速功率关系.md",
+            "03_限功率.md",
+            "04_偏航误差.md",
+            "05_桨距角.md",
+            "06_SCADA异常.md",
+        },
+    ),
+    EvalCase(
+        question="偏航误差应该怎么判断，为什么会让模型高估？",
+        expected_sources={
+            "04_偏航误差.md",
+            "01_风速功率关系.md",
+            "06_SCADA异常.md",
+        },
+    ),
+    EvalCase(
+        question="风向快速变化后预测误差变大，可能和什么有关？",
+        expected_sources={
+            "02_风速波动.md",
+            "04_偏航误差.md",
+            "07_预测误差.md",
+        },
+    ),
+    EvalCase(
+        question="桨距角 SHAP 贡献高，工程上应该怎么解释？",
+        expected_sources={
+            "05_桨距角.md",
+            "08_SHAP解释.md",
+            "11_SHAP可解释性论文.md",
+        },
+    ),
+    EvalCase(
+        question="为什么 RAG 能减少大模型胡编，检索结果差会有什么影响？",
+        expected_sources={
+            "12_RAG检索策略与混合检索.md",
+        },
+    ),
+    EvalCase(
+        question="预测曲线趋势差不多但整体提前或滞后，应该先检查什么？",
+        expected_sources={
+            "06_SCADA异常.md",
+            "02_风速波动.md",
+            "07_预测误差.md",
+        },
+    ),
+    EvalCase(
+        question="为什么训练前要清洗风机 SCADA 功率曲线异常点？",
+        expected_sources={
+            "10_SCADA异常与数据清洗论文.md",
+            "06_SCADA异常.md",
+            "01_风速功率关系.md",
+        },
+    ),
+    EvalCase(
+        question="有风但功率接近 0 的样本会怎样影响模型？",
+        expected_sources={
+            "10_SCADA异常与数据清洗论文.md",
+            "03_限功率.md",
+            "06_SCADA异常.md",
+        },
+    ),
+    EvalCase(
+        question="高风速下功率形成固定平台，怎么区分额定平台和限功率？",
+        expected_sources={
+            "03_限功率.md",
+            "01_风速功率关系.md",
+            "05_桨距角.md",
+        },
+    ),
+    EvalCase(
+        question="为什么模型在风速突增时容易低估峰值？",
+        expected_sources={
+            "02_风速波动.md",
+            "07_预测误差.md",
+            "09_风电功率预测论文综述.md",
+        },
+    ),
+    EvalCase(
+        question="短期和超短期风电功率预测有什么区别？",
+        expected_sources={
+            "09_风电功率预测论文综述.md",
+            "02_风速波动.md",
+        },
+    ),
+    EvalCase(
+        question="物理模型、统计模型和深度学习模型各适合什么预测场景？",
+        expected_sources={
+            "09_风电功率预测论文综述.md",
+        },
+    ),
+    EvalCase(
+        question="点预测和区间预测有什么区别，为什么风电预测要表达不确定性？",
+        expected_sources={
+            "09_风电功率预测论文综述.md",
+            "07_预测误差.md",
+        },
+    ),
+    EvalCase(
+        question="历史功率 SHAP 贡献高但工况突然变化时，为什么可能预测滞后？",
+        expected_sources={
+            "08_SHAP解释.md",
+            "11_SHAP可解释性论文.md",
+            "02_风速波动.md",
+        },
+    ),
+    EvalCase(
+        question="为什么不能把 SHAP 特征重要性直接当成真实原因？",
+        expected_sources={
+            "08_SHAP解释.md",
+            "11_SHAP可解释性论文.md",
+            "06_SCADA异常.md",
+        },
+    ),
+    EvalCase(
+        question="TF-IDF 和 embedding 检索各有什么优势，为什么要混合？",
+        expected_sources={
+            "12_RAG检索策略与混合检索.md",
+        },
+    ),
+    EvalCase(
+        question="如果某个传感器长时间不变，为什么会误导预测和解释？",
+        expected_sources={
+            "06_SCADA异常.md",
+            "10_SCADA异常与数据清洗论文.md",
+            "08_SHAP解释.md",
+        },
+    ),
+    EvalCase(
+        question="功率曲线下方出现密集散点，通常可能是什么工况？",
+        expected_sources={
+            "01_风速功率关系.md",
+            "03_限功率.md",
+            "04_偏航误差.md",
+            "05_桨距角.md",
+            "10_SCADA异常与数据清洗论文.md",
+        },
+    ),
+    EvalCase(
+        question="检索结果混入无关文档时，会怎样影响 RAG 回答质量？",
+        expected_sources={
+            "12_RAG检索策略与混合检索.md",
+        },
+    ),
+]
+
+
 def main() -> None:
     args = parse_args()
     chunks = load_markdown_chunks(args.knowledge_dir)
     retrievers = build_retrievers(chunks, args.embedding_model)
-    rows = [
-        evaluate_case(method, retriever, case, top_k=args.top_k)
-        for method, retriever in retrievers.items()
-        for case in EVAL_CASES
-    ]
 
-    print_summary(rows, top_k=args.top_k)
-    if args.details:
-        print_details(rows, top_k=args.top_k)
+    for eval_name, eval_cases in [
+        ("Eval set 1", EVAL_CASES),
+        ("Eval set 2", EVAL_CASES_2),
+    ]:
+        rows = evaluate_cases(retrievers, eval_cases, top_k=args.top_k)
+        print_summary(rows, top_k=args.top_k, title=eval_name)
+        if args.details:
+            print_details(rows, top_k=args.top_k, title=eval_name)
 
 
 def parse_args() -> argparse.Namespace:
@@ -145,6 +316,18 @@ def build_retrievers(chunks, embedding_model: str) -> dict[str, Retriever]:
     }
 
 
+def evaluate_cases(
+    retrievers: dict[str, Retriever],
+    eval_cases: list[EvalCase],
+    top_k: int,
+) -> list[EvalRow]:
+    return [
+        evaluate_case(method, retriever, case, top_k=top_k)
+        for method, retriever in retrievers.items()
+        for case in eval_cases
+    ]
+
+
 def evaluate_case(
     method: str,
     retriever: Retriever,
@@ -178,8 +361,8 @@ def dedupe_preserve_order(items: list[str]) -> list[str]:
     return deduped
 
 
-def print_summary(rows: list[EvalRow], top_k: int) -> None:
-    print(f"\nRetrieval evaluation, file-level Precision@{top_k} / Recall@{top_k}")
+def print_summary(rows: list[EvalRow], top_k: int, title: str) -> None:
+    print(f"\n{title}: file-level Precision@{top_k} / Recall@{top_k}")
     print("-" * 72)
     print(f"{'Method':<12} {'Cases':>5} {'Precision':>10} {'Recall':>10} {'Hit cases':>10}")
     print("-" * 72)
@@ -196,8 +379,8 @@ def print_summary(rows: list[EvalRow], top_k: int) -> None:
         )
 
 
-def print_details(rows: list[EvalRow], top_k: int) -> None:
-    print(f"\nPer-question details, top_k={top_k}")
+def print_details(rows: list[EvalRow], top_k: int, title: str) -> None:
+    print(f"\n{title}: per-question details, top_k={top_k}")
     print("=" * 72)
     for row in rows:
         print(f"\n[{row.method}] {row.question}")
